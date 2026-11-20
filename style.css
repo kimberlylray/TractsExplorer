@@ -759,3 +759,89 @@ table.matrix-table td.cell:hover { outline: 2px solid var(--accent); outline-off
   .topic-bar-label { width: 140px; min-width: 140px; }
   .topic-detail { position: static; flex-basis: 100%; }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   SKAI PANEL — brainlife.io's assistant, left of the explorer
+   (only rendered when config.skai.url is set)
+   ═══════════════════════════════════════════════════════════════ */
+.te-layout { display: flex; height: 100vh; }
+.te-layout > .wmc-root { flex: 1; min-width: 0; }
+/* The panel takes 360 px, so the explorer's width breakpoints (1100 / 1200 px
+   windows, i.e. 728 / 828 px of content beside the 372 px sidebar) follow
+   the content area, not the window, while the panel is shown. */
+.te-layout .wmc-content { container-type: inline-size; }
+@container (max-width: 728px) {
+  .workspace { grid-template-columns: 1fr; } .ws-brain { position: static; } .ws-brain .brain-ws { max-width: 900px; } .brain-stage { aspect-ratio: 16 / 10; }
+  .endpoint-charts { grid-template-columns: 1fr; }
+}
+@container (max-width: 828px) { .endpoint-cols { grid-template-columns: 1fr; } .endpoint-col .topic-bar-label { width: 200px; min-width: 200px; } }
+.skai-panel {
+  width: 360px; flex-shrink: 0; height: 100vh; display: flex; flex-direction: column;
+  background: var(--bg-2); border-right: 1px solid var(--rule); color: var(--ink);
+}
+.skai-panel.collapsed { width: 44px; }
+.skai-rail { flex: 1; display: flex; justify-content: center; align-items: flex-start; padding-top: 14px; }
+.skai-login, .skai-rail-btn {
+  writing-mode: vertical-rl; transform: rotate(180deg); display: flex; align-items: center; gap: 8px;
+  padding: 12px 6px; border-radius: var(--radius); border: 1px solid var(--rule-strong);
+  background: none; color: var(--accent); font: 500 .82rem var(--font-sans); cursor: pointer; white-space: nowrap;
+}
+.skai-login:hover, .skai-rail-btn:hover { border-color: var(--accent); background: rgba(63,210,255,.08); color: var(--accent); }
+.skai-rail-btn span[aria-hidden] { transform: rotate(90deg); }
+.skai-mark { font-family: var(--font-mono); letter-spacing: .12em; }
+.skai-head {
+  display: flex; align-items: baseline; gap: 10px; padding: 0 14px; height: var(--header-h);
+  border-bottom: 1px solid var(--rule); flex-shrink: 0; align-items: center;
+}
+.skai-title { font-family: var(--font-mono); font-weight: 500; letter-spacing: .14em; color: var(--accent); }
+.skai-sub { color: var(--soft); font-size: .78rem; }
+.skai-collapse { margin-left: auto; font-size: 1rem; }
+.skai-banner {
+  padding: 8px 14px; font-size: .84rem; color: var(--ink);
+  background: rgba(169,38,44,.22); border-bottom: 1px solid rgba(169,38,44,.5);
+}
+.skai-linkbtn { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
+.skai-log { flex: 1; overflow-y: auto; padding: 16px 14px; display: flex; flex-direction: column; gap: 12px; }
+.skai-welcome { margin: 0; color: var(--muted); font-size: .9rem; }
+.skai-starters { display: flex; flex-direction: column; gap: 8px; }
+.skai-starter {
+  text-align: left; padding: 8px 12px; border-radius: var(--radius); border: 1px solid var(--rule-strong);
+  background: var(--surface); color: var(--ink); font: .86rem/1.4 var(--font-sans); cursor: pointer;
+}
+.skai-starter:hover:not(:disabled) { border-color: var(--accent); }
+.skai-starter:disabled { opacity: .5; cursor: default; }
+.skai-msg { font-size: .9rem; line-height: 1.5; }
+.skai-msg.user { align-self: flex-end; max-width: 88%; }
+.skai-bubble { background: var(--surface-2); border: 1px solid var(--rule); border-radius: var(--radius); padding: 8px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.skai-md { overflow-wrap: anywhere; }
+.skai-md p { margin: 0 0 8px; }
+.skai-md ul, .skai-md ol { margin: 0 0 8px; padding-left: 20px; }
+.skai-md code { font-family: var(--font-mono); font-size: .82rem; background: var(--surface); padding: 1px 4px; border-radius: 4px; }
+.skai-md pre { margin: 0 0 8px; padding: 8px 10px; background: var(--surface); border-radius: 6px; overflow-x: auto; }
+.skai-md pre code { padding: 0; background: none; }
+.skai-md a.skai-explorer-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.skai-chip {
+  margin-top: 2px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--accent);
+  background: rgba(63,210,255,.1); color: var(--accent); font: .76rem var(--font-mono); cursor: pointer;
+}
+.skai-chip:hover { background: rgba(63,210,255,.2); }
+.skai-thinking { color: var(--soft); font-size: .84rem; font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.skai-input { display: flex; gap: 8px; align-items: flex-end; padding: 10px 14px; border-top: 1px solid var(--rule); flex-shrink: 0; }
+.skai-input textarea {
+  flex: 1; resize: none; background: var(--bg); color: var(--ink); border: 1px solid var(--rule-strong);
+  border-radius: 6px; padding: 7px 10px; font: .88rem/1.4 var(--font-sans);
+}
+.skai-input textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.skai-input .btn:disabled { opacity: .5; cursor: default; }
+.skai-note { margin: 0; padding: 0 14px 8px; color: var(--soft); font-size: .76rem; }
+/* Narrow screens: a drawer over the explorer; collapsed = a floating pill */
+@media (max-width: 900px) {
+  .skai-panel.drawer { position: fixed; top: 0; bottom: 0; left: 0; z-index: 160; width: min(92vw, 360px); box-shadow: 0 0 40px rgba(0,0,0,.5); }
+  .skai-panel.drawer.collapsed { top: auto; bottom: 16px; left: 16px; width: auto; height: auto; background: none; border: 0; box-shadow: none; }
+  .skai-panel.drawer.collapsed .skai-rail { padding: 0; }
+  .skai-panel.drawer.collapsed .skai-login, .skai-panel.drawer.collapsed .skai-rail-btn {
+    writing-mode: horizontal-tb; transform: none; padding: 8px 14px; border-radius: 999px;
+    background: var(--bg-2); box-shadow: 0 4px 18px rgba(0,0,0,.45);
+  }
+  .skai-panel.drawer.collapsed .skai-rail-btn span[aria-hidden] { transform: none; }
+}

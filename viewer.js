@@ -925,6 +925,26 @@ ${SURF_PANEL_TEMPLATE}
   },
 
   computed: {
+    // What is on screen, as view-link parameters (see view-state.js). Defaults
+    // are left out so links stay short; applyView() restores the same view.
+    currentView() {
+      const v = {};
+      if (this.thresholdFolder !== TEView.resolveThreshold('default', this.config)) v.thr = this.thresholdFolder;
+      if (this.tab !== 'cluster') v.tab = this.tab;
+      if (this.tab === 'cluster' && this.selectedCluster) v.cluster = this.selectedCluster;
+      if (this.tab === 'tract' && this.selectedTract) v.tract = this.selectedTract;
+      if (this.tab === 'matrix') return v;
+      const m = /^(\d+)_/.exec(this.selectedTopic || '');
+      if (m) v.topic = Number(m[1]);
+      if (this.subTab !== 'map') v.section = this.subTab;
+      if (['RAS', 'LPI', 'bytract'].includes(this.brain.mode)) v.map = this.brain.mode;
+      if (this.brain.view !== 'dorsal') v.view = this.brain.view;
+      const preset = this.brainViews.find(x => x.id === this.brain.view);
+      if (!preset || this.brain.hemi !== preset.hemi) v.hemi = this.brain.hemi;
+      if (this.networkAtlas && this.networkAtlas !== this.networkAtlases[0]) v.atlas = this.networkAtlas;
+      return v;
+    },
+
     // Threshold config value may be a string (legacy) or an object
     thresholdCfg()    {
       const v = this.config.thresholds[this.selectedThreshold];
@@ -1184,19 +1204,22 @@ ${SURF_PANEL_TEMPLATE}
   },
 
   mounted() {
-    // Deep link from the landing page's "Cluster View" / "Tract View" /
-    // "Full Matrix" cards (explorer.html#cluster|tract|matrix).
-    const hashTab = (location.hash || '').replace('#', '');
-    if (hashTab === 'tract') { this.tab = 'tract'; }
-    if (hashTab === 'tract') { this.tab = 'tract'; this.sideMode = 'tracts'; }
-    else if (hashTab === 'matrix') { this.tab = 'matrix'; }
-    else if (hashTab === 'cluster') { this.tab = 'cluster'; }
+    // View links (explorer.html?thr=…&cluster=…, see view-state.js) and the
+    // landing page's #cluster|#tract|#matrix cards. Read the URL now, before
+    // anything rewrites it; the threshold is set up front so it loads once.
+    const view = TEView.parse(location.search, location.hash, this.config);
+    const label = this.thresholdLabel(view.thr);
+    if (label) this.selectedThreshold = label;
+    if (view.tab === 'tract') this.sideMode = 'tracts';
 
     if (!this.clustersEnabled) {
       this.tab = 'tract';
     }
+    window.teExplorer = this;   // for the SKAI panel: applyView() / currentView
     this.loadData();
     this.loadTopicTerms();
+    // Open the linked view once the data is in, then keep the address bar in sync.
+    this.applyView(view).then(() => { this._urlReady = true; this.syncUrl(); });
   },
 
   beforeDestroy() {
@@ -1206,6 +1229,9 @@ ${SURF_PANEL_TEMPLATE}
 
   updated() { if (!this._secObsQueued) { this._secObsQueued = true; this.$nextTick(() => { this._secObsQueued = false; this.observeSections(); }); } },
   watch: {
+    // Address bar follows the view (replaceState: no Back-button entries).
+    currentView: { handler() { this.syncUrl(); }, deep: true },
+    loading(v) { if (!v) this.syncUrl(); },
     networkAtlas() { if (this.brain.atlas) { this.focusNetwork = null; this.queueSurfRefresh(); } },
     hoverNetwork(v) {
       if (!this.brain.atlas) return;
@@ -1239,6 +1265,79 @@ ${SURF_PANEL_TEMPLATE}
   },
 
   methods: {
+    // ── View links ────────────────────────────────────────────────
+    // Open a view described by view-link parameters (TEView.parse output).
+    // Safe at any time: waits for a threshold that is still loading, the
+    // latest call wins, and anything this threshold's data lacks is skipped.
+    async applyView(p) {
+      p = p || {};
+      const token = (this._applyToken = (this._applyToken || 0) + 1);
+      const live = () => token === this._applyToken;
+      this._pendingBrainView = null;
+      try {
+        await this._whenLoaded();
+        if (!live()) return;
+        const label = this.thresholdLabel(p.thr);
+        if (label && p.thr !== this.thresholdFolder) {
+          this.selectedThreshold = label;
+          this.onThresholdChange();
+          await this._whenLoaded();
+          if (!live()) return;
+        }
+        if (p.tract && this.tractOrder.includes(p.tract)) this.selectTractAndSwitch(p.tract);
+        if (p.cluster && this.clustersEnabled && this.clusters.some(c => c.id === p.cluster)) this.selectCluster(p.cluster);
+        if (p.tab === 'tract') this.showTractView();
+        else if (p.tab === 'cluster' && this.clustersEnabled) this.showClusterView();
+        else if (p.tab === 'matrix') this.tab = 'matrix';
+        if (this.tab === 'matrix') return;   // the rest lives in the cluster / tract views
+        if (p.topic) {
+          const topic = this.topics.find(t => { const m = /^(\d+)_/.exec(t); return m && Number(m[1]) === p.topic; });
+          if (topic) this.openTopic(topic);
+        }
+        if (p.map) this.setBrainMode(p.map);
+        if (p.view || p.hemi) {
+          await this.$nextTick();   // surfTracts now reflects the new selection
+          if (!live()) return;
+          if (p.view) this.setBrainView(p.view);
+          if (p.hemi) this.setBrainHemi(p.hemi);
+          // A selection whose map hasn't loaded yet picks its own camera when it
+          // lands (loadBrain); hand it this one instead.
+          const key = this.tab + '|' + this.surfTracts.join(',');
+          if (this._brainKey !== key) this._pendingBrainView = { key, view: p.view, hemi: p.hemi };
+        }
+        if (p.atlas || p.section === 'networks') {
+          await this._networksReady;   // atlases come from network-correspondence.csv
+          if (!live()) return;
+        }
+        if (p.atlas && this.networkAtlases.includes(p.atlas)) this.networkAtlas = p.atlas;
+        if (p.section) this.goToSection(p.section);
+      } catch (err) {
+        console.error('Could not open view:', err);
+      }
+    },
+    // Resolves once the current threshold's matrix.csv has loaded.
+    _whenLoaded() {
+      if (!this.loading) return Promise.resolve();
+      return new Promise(resolve => {
+        const stop = this.$watch('loading', v => { if (!v) { stop(); resolve(); } });
+      });
+    },
+    thresholdLabel(folder) {
+      if (!folder) return null;
+      return Object.keys(this.config.thresholds).find(k => {
+        const v = this.config.thresholds[k];
+        return (typeof v === 'string' ? v : v.folder) === folder;
+      }) || null;
+    },
+    // Mirror currentView in the address bar without adding history entries.
+    syncUrl() {
+      if (!this._urlReady || this.loading) return;
+      const q = TEView.toQuery(this.currentView);
+      if (q === location.search && !location.hash) return;
+      // Safari throws once replaceState is called too often; the next change syncs again.
+      try { history.replaceState(null, '', location.pathname + q); } catch (e) {}
+    },
+
     // ── Intro tour ────────────────────────────────────────────────
     onThresholdChange() {
       // The loading panel below unmounts the Tract View's canvases, so release
@@ -1262,12 +1361,16 @@ ${SURF_PANEL_TEMPLATE}
 
     loadData() {
       const url = `${this.baseUrl}/matrix.csv`;
+      // Only the latest request counts: switching threshold again before the
+      // previous matrix.csv arrived must not let the older one win.
+      const req = (this._dataReq = (this._dataReq || 0) + 1);
       Papa.parse(url, {
         download: true,
         header: true,
         dynamicTyping: false,
         skipEmptyLines: true,
         complete: (results) => {
+          if (req !== this._dataReq) return;
           this.parseMatrix(results);
           this.loading = false;
           this.loadClusterMatrix();
@@ -1295,16 +1398,18 @@ ${SURF_PANEL_TEMPLATE}
             this.selectCluster(this.clusters[0].id);
           }
 
-          // First visit: open the guided tour once the page has something to show.
+          // First visit: open the guided tour once the page has something to show
+          // (not when arriving via a link to a specific view).
           if (!this._tourOffered) {
             this._tourOffered = true;
-            if (readPref('wmc.tourDone') !== '1' && !location.hash) {
+            if (readPref('wmc.tourDone') !== '1' && !location.hash && !location.search) {
               setTimeout(() => { if (!this.tour.active) this.startTour(); }, 900);
             }
           }
 
         },
         error: (err) => {
+          if (req !== this._dataReq) return;
           console.error('Failed to load matrix CSV:', err);
           this.loading = false;
         }
@@ -1458,19 +1563,30 @@ ${SURF_PANEL_TEMPLATE}
     // entry follows the scroll position (see observeSections).
     goToSection(id) {
       this.subTab = id;
+      // Let the smooth scroll finish before scroll-spy takes over again, so a
+      // short last section (Networks) isn't relabelled as the one above it.
+      this._secSpyPausedUntil = Date.now() + 1200;
       this.$nextTick(() => {
         const el = this.$el.querySelector('#sec-' + id);
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     },
     observeSections() {
-      if (this._secObs) this._secObs.disconnect();
       const root = this.$el.querySelector('.tab-panel');
-      const secs = this.$el.querySelectorAll('section.subpanel[data-section]');
+      const secs = Array.from(this.$el.querySelectorAll('section.subpanel[data-section]'));
+      // Called after every re-render: keep the observer while the sections are
+      // the same elements. A new observer reports every section at once and
+      // would re-pick the most visible one, overriding the chosen sub-tab.
+      const same = this._secObs && root === this._secRoot &&
+        secs.length === this._secEls.length && secs.every((el, i) => el === this._secEls[i]);
+      if (same) return;
+      if (this._secObs) { this._secObs.disconnect(); this._secObs = null; }
+      this._secRoot = root;
+      this._secEls = secs;
       if (!root || !secs.length || typeof IntersectionObserver === 'undefined') return;
       this._secObs = new IntersectionObserver(entries => {
         const vis = entries.filter(e => e.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio);
-        if (vis.length) this.subTab = vis[0].target.dataset.section;
+        if (vis.length && !(Date.now() < this._secSpyPausedUntil)) this.subTab = vis[0].target.dataset.section;
       }, { root, threshold: [0.25, 0.5, 0.75] });
       secs.forEach(el => this._secObs.observe(el));
     },
@@ -1567,12 +1683,14 @@ ${SURF_PANEL_TEMPLATE}
     // matrix_RAS.csv / matrix_LPI.csv: each endpoint decoded on its own
     // (same layout as matrix.csv). Missing file → that column says "no data".
     loadSideMatrices() {
+      const base = this.baseUrl;
       ['RAS', 'LPI'].forEach(side => {
         const key = 'matrix' + side;
         this[key] = {};
-        Papa.parse(`${this.baseUrl}/matrix_${side}.csv`, {
+        Papa.parse(`${base}/matrix_${side}.csv`, {
           download: true, header: true, skipEmptyLines: true,
           complete: (results) => {
+            if (base !== this.baseUrl) return;   // threshold changed meanwhile
             const fields = results.meta.fields || [];
             if (!fields.length) return;
             const out = {};
@@ -1633,13 +1751,14 @@ ${SURF_PANEL_TEMPLATE}
     // threshold hasn't had its cluster decoding exported/copied in yet.
     loadClusterMatrix() {
       this.clusterMatrix = {};
-      const url = `${this.baseUrl}/cluster-matrix.csv`;
-      Papa.parse(url, {
+      const base = this.baseUrl;
+      Papa.parse(`${base}/cluster-matrix.csv`, {
         download: true,
         header: true,
         dynamicTyping: false,
         skipEmptyLines: true,
         complete: (results) => {
+          if (base !== this.baseUrl) return;   // threshold changed meanwhile
           if (results.errors && results.errors.length && !results.data.length) return; // no file
           const fields = results.meta.fields || [];
           const clusterCol = fields[0];
@@ -1670,13 +1789,18 @@ ${SURF_PANEL_TEMPLATE}
     loadNetworkCorrespondence() {
       this.networkCorrespondence = {};
       this.networkAtlases = [];
-      const url = `${this.baseUrl}/network-correspondence.csv`;
-      Papa.parse(url, {
+      const base = this.baseUrl;
+      // applyView() waits on this before picking an atlas / the Networks section.
+      let done;
+      this._networksReady = new Promise(r => { done = r; });
+      Papa.parse(`${base}/network-correspondence.csv`, {
         download: true,
         header: true,
         dynamicTyping: false,
         skipEmptyLines: true,
         complete: (results) => {
+          done();   // waiters resume after this callback has run
+          if (base !== this.baseUrl) return;   // threshold changed meanwhile
           if (!results.data.length) return; // no file for this threshold
           const byEntity = {};
           const atlases = new Set();
@@ -1697,7 +1821,7 @@ ${SURF_PANEL_TEMPLATE}
             this.networkAtlas = this.networkAtlases[0] || null;
           }
         },
-        error: () => { /* network-correspondence.csv not present for this threshold — panel just hides */ }
+        error: () => { done(); /* network-correspondence.csv not present for this threshold — panel just hides */ }
       });
     },
 
@@ -1807,11 +1931,14 @@ ${SURF_PANEL_TEMPLATE}
     setBrainView(id) {
       const v = this.brainViews.find(x => x.id === id) || this.brainViews[0];
       this.brain.view = v.id;
-      this.brain.hemi = v.hemi;
+      this.setBrainHemi(v.hemi);
+      if (this._surf) this._surf.setView(v.cam);
+    },
+    setBrainHemi(hemi) {
+      this.brain.hemi = hemi;
       if (this._surf) {
-        this._surf.setHemiVisible('lh', v.hemi !== 'rh');
-        this._surf.setHemiVisible('rh', v.hemi !== 'lh');
-        this._surf.setView(v.cam);
+        this._surf.setHemiVisible('lh', hemi !== 'rh');
+        this._surf.setHemiVisible('rh', hemi !== 'lh');
       }
     },
     resetBrain() { if (this._surf) { this._surf.resetZoom(); this.setBrainView(this.brain.view); } },
@@ -1933,7 +2060,11 @@ ${SURF_PANEL_TEMPLATE}
           this._brainKey = this.tab + '|' + tracts.join(',');
           const hemis = found.map(f => f.hemi);
           const v = hemis.length === 2 ? 'dorsal' : hemis[0] === 'lh' ? 'lateral-left' : 'lateral-right';
-          scene.resetZoom(); this.setBrainView(v);
+          // ...unless a view link asked for a camera / hemisphere (applyView).
+          const pend = this._pendingBrainView && this._pendingBrainView.key === this._brainKey ? this._pendingBrainView : null;
+          if (pend) this._pendingBrainView = null;
+          scene.resetZoom(); this.setBrainView((pend && pend.view) || v);
+          if (pend && pend.hemi && (pend.hemi === 'both' || hemis.includes(pend.hemi))) this.setBrainHemi(pend.hemi);
         }
         this.brain.max = max;
         this.brain.status = 'ready';
