@@ -4,7 +4,7 @@ Interactive visualization of white matter tract endpoint decoding — how the co
 
 Everything is drawn live in the browser from CSV / GIFTI data: no pre-rendered figures are needed.
 
-**Live:** [kimberlylray.github.io/ui-wmc-endpoint-decoding](https://kimberlylray.github.io/ui-wmc-endpoint-decoding/) — a landing page (`index.html`) with the project description, preprint link and citation, linking to the actual tool (`explorer.html`).
+**Live:** the site is published from this repo ([francopestilli/TractsExplorer](https://github.com/francopestilli/TractsExplorer)) — a landing page (`index.html`) with the project description, preprint link and citation, linking to the actual tool (`explorer.html`).
 
 White matter tracts were defined from [Bullock et al., 2022](https://academic.oup.com/cercor/article/32/20/4524/6528900) ("A taxonomy of the brain's white matter: twenty-one major tracts for the 21st century", *Cerebral Cortex*) using its [brainlife.io app](https://brainlife.io/app/5cc73ef44ed9df00317f6288).
 
@@ -149,12 +149,103 @@ Any static file server works (e.g. `python3 -m http.server 3000`); opening the H
 
 The site is static, so it can be served from GitHub Pages (Settings → Pages → deploy from `main`, folder `/`) — `index.html` becomes the landing page visitors land on. For brainlife.io, point `dataBase` in `explorer.html` at the brainlife output location.
 
+## View links
+
+Every view of the explorer has a link. `explorer.html` reads these query parameters on load (all optional; invalid values are ignored) and keeps the address bar in sync as you click around, so any link you copy reopens the same view. A bare `#cluster` / `#tract` / `#matrix` hash still works for `tab`.
+
+| Parameter | Values | Meaning |
+|---|---|---|
+| `thr` | a folder (`thr-15`), a value (`0.15`) or `default` | threshold; `default` = the `defaultThreshold` in `config.json` |
+| `tab` | `cluster`, `tract`, `matrix` | which view |
+| `cluster` | positive integer | cluster number (Cluster View) |
+| `tract` | tract id, e.g. `leftArc` | tract (Tract View) |
+| `topic` | positive integer | topic to open in the details panel |
+| `section` | `map`, `topics`, `charts`, `networks` | section to scroll to |
+| `map` | `both`, `RAS`, `LPI`, `bytract` | which endpoint map to show |
+| `hemi` | `both`, `lh`, `rh` | hemisphere |
+| `view` | `dorsal`, `ventral`, `anterior`, `posterior`, `lateral-left`, `lateral-right`, `medial-left`, `medial-right` | camera angle |
+| `atlas` | atlas code, e.g. `AS200Y17` | network atlas |
+
+Example: `explorer.html?thr=0.15&tab=tract&tract=leftArc&atlas=AS200Y17`. Parsing lives in `view-state.js`.
+
+## Shared configuration
+
+`config.json` holds what both the explorer and the Python server need: data paths, the thresholds (label → folder, surface path, dendrogram cut, numeric `value`), `defaultThreshold` (`0.15 full (46 in tree)`), and the `skai` block (`url`, `loginUrl`). To add a threshold, add it there (see *Adding a threshold*).
+
+## Running the server
+
+A small FastAPI app in `server/` serves the static site and a read-only JSON API over the same CSV files. It needs Python 3.10 or newer (macOS's `/usr/bin/python3` is 3.9: use a newer one, e.g. from Homebrew or conda).
+
+```bash
+python3 -m venv server/.venv
+server/.venv/bin/pip install -r server/requirements.txt       # tests: requirements-dev.txt (see Tests)
+server/.venv/bin/uvicorn app:app --app-dir server      # http://localhost:8000
+```
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `PUBLIC_URL` | `http://localhost:8000` | base of the `view_url` links the API returns (e.g. `https://brainlife.io/tractexplorer`) |
+| `ROOT_PATH` | empty | reverse-proxy prefix (e.g. `/tractexplorer`) |
+| `TE_ROOT` | the repo root | folder holding `config.json`, `testdata/` and `assets/` |
+
+The server only serves an allow-list of static files (the HTML/JS/CSS at the top level plus `assets/`, `testdata/`), never dotfiles or the server code. `testdata/` may be a symlink (e.g. to a data volume); links inside it must stay inside it.
+
+Behind a reverse proxy at a prefix (e.g. `/tractexplorer`): if the proxy passes the prefix through, set `ROOT_PATH` and the app itself redirects a bare `/tractexplorer` to `/tractexplorer/` (needed so the page's relative asset paths resolve). If the proxy strips the prefix, the app cannot see the difference, so add that redirect as a proxy rule. Run uvicorn with `--proxy-headers` (and `--forwarded-allow-ips` set to the proxy) so redirects keep the public scheme and host.
+
+## API
+
+All responses are JSON. Responses that depend on a threshold (`/api/view-url` and the `/api/{thr}/...` routes) include a `threshold` object saying which one was used. Results for clusters and tracts include a `view_url` that opens the matching view in the explorer; `/api/thresholds` and `/api/topics` have neither.
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/thresholds` | available thresholds and the default |
+| `GET /api/topics?q=` | topics matching a keyword |
+| `GET /api/view-url?thr=&tab=&cluster=&tract=&...` | a validated explorer link (same parameters as *View links*; an unknown tract, cluster or atlas is a 404) |
+| `GET /api/{thr}/clusters` | the clusters |
+| `GET /api/{thr}/clusters/{n}?atlas=&limit=` | one cluster: member tracts, top topics, networks |
+| `GET /api/{thr}/tracts?q=` | find tracts by name (`leftArc` or "left arcuate") |
+| `GET /api/{thr}/tracts/{tract}?atlas=&limit=` | one tract: cluster, top topics, networks |
+| `GET /api/{thr}/topics/{topic_id}/tracts?limit=` | tracts ranked by match to a topic |
+| `GET /api/{thr}/networks?entity=tract:leftArc&atlas=&limit=` | Dice overlap with atlas networks (`entity=cluster:2` also works) |
+
+Rules:
+
+- `{thr}` accepts a folder (`thr-15`), a value (`0.15`) or `default`. `default` is `0.15 full` (`thr-15`), taken from `defaultThreshold` in `config.json`.
+- Top topics are ranked by |r| (the sign is kept in the output). `topics/{id}/tracts` is ranked by signed r.
+- With no `atlas`, the default is the alphabetically first one (`AS200Y17`). A network counts as significant when p ≤ 0.05.
+- Errors are `{"error": ..., "hint": ...}` with a suitable status code.
+
+## SKAI panel
+
+The explorer can embed a chat panel for [SKAI](https://github.com/brainlife/brainlife-assistant), brainlife's assistant (`skai-client.js`, `skai-panel.js`). It only appears when `config.skai.url` is set **and** a brainlife login is present in the browser (`localStorage['jwt']`); otherwise the page looks as it always did, except for a "Log in to ask SKAI" link when nobody is logged in.
+
+- For development, put a token in `localStorage['tractexplorer.devJwt']`.
+- SKAI answers using its TractsExplorer tool server (in the `brainlife-assistant` repo), which calls this API. The panel has no client-side tool: it finds explorer links in SKAI's replies and applies them to the view, and each such answer gets a "Showing: ..." chip to reopen it.
+- Each question is sent with a short line saying what the explorer shows, e.g. `(Viewing in TractsExplorer: threshold thr-15 · tract leftArc)`, so "this tract" means something; the chat shows only the question. When SKAI asks something back, its question (and any options) appears in the chat and the next reply answers it.
+- For deployment, SKAI must list the explorer's origin in its `WHITELISTED_ORIGINS`.
+- Set `config.skai.url` only in the brainlife.io deployment. Elsewhere (e.g. GitHub Pages) there is no brainlife login to read, so the panel could only ever show "Log in".
+- All open explorer tabs share one SKAI session ("TractsExplorer"), so an answer to a question asked in one tab also moves the view in the others.
+
+**Open question — login hand-off.** The panel's login link currently sends users to `config.skai.loginUrl` with `?redirect=<current page>`, but brainlife's auth redirects back differently, so this needs confirming. Also, `localStorage['jwt']` is only visible on brainlife's own origin: fine when the explorer is at `brainlife.io/tractexplorer`, to be confirmed at deployment. SKAI's `/ticket` may also answer 500 rather than 401 for a bad token, in which case the panel would show "offline" rather than asking for a new login.
+
+## Tests
+
+```bash
+server/.venv/bin/pip install -r server/requirements-dev.txt   # once: pytest, httpx, scipy
+server/.venv/bin/python -m pytest server/tests -W error
+node --test tests/js/*.test.mjs        # list the files; the directory form fails on Node 25
+```
+
 ## Code
 
 | File | Role |
 |---|---|
 | `index.html` | landing page: description, preprint link/citation, and live previews (reusing `cluster.js`/`surf3d.js` against real data) of each view |
 | `explorer.html` | the tool itself: page shell + configuration (thresholds, data paths) |
+| `config.json` | shared configuration: data paths, thresholds, default threshold, SKAI settings |
+| `view-state.js` | parses/builds view-link URLs |
+| `server/` | FastAPI app: static site + JSON API (`app.py`, `data.py`) |
+| `skai-client.js`, `skai-panel.js` | SKAI chat panel |
 | `viewer.js` | main Vue component (views, data loading, interaction) |
 | `cluster.js` | hierarchical clustering + dendrogram |
 | `charts.js` | radar chart + word cloud |
